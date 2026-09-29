@@ -1,5 +1,9 @@
 # Spring Boot Chaos Monkey Scripts
 
+For Kubernetes/Argo CD deployments, use the [controlled experiment guide](CLUSTER.md)
+and `experiment.py`. The original helpers below directly toggle faults and do not
+provide automatic cleanup or assertions.
+
 You can read more about the possible configuration options [here](https://codecentric.github.io/chaos-monkey-spring-boot/latest/#_properties).
 
 ## Scripts

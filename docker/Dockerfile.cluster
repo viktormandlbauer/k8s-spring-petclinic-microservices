@@ -1,0 +1,12 @@
+FROM docker.io/library/maven:3.9-eclipse-temurin-17 AS extract
+WORKDIR /extracted
+ARG ARTIFACT_NAME
+COPY ${ARTIFACT_NAME}.jar /tmp/application.jar
+RUN jar -xf /tmp/application.jar
+
+FROM docker.io/library/eclipse-temurin:17-jre
+WORKDIR /application
+COPY --from=extract /extracted/ ./
+ENV SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/config/common/,optional:file:/config/app/
+USER 10001:10001
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]

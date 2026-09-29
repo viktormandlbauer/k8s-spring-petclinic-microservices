@@ -1,0 +1,179 @@
+{{- $root := . -}}
+{{- $name := include "petclinic.name" . -}}
+{{- range $service, $config := .Values.services }}
+{{- $chaos := and $root.Values.chaos.enabled (has $service $root.Values.chaos.services) }}
+{{- if and $chaos (not (has $service (list "customers-service" "visits-service" "vets-service"))) }}
+{{- fail "Chaos Monkey supports only customers-service, visits-service and vets-service" }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-{{ $service }}
+  labels:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $service }}
+    petclinic-metrics: "true"
+spec:
+  {{- if and (eq $service "api-gateway") $root.Values.gateway.nodePort }}
+  type: NodePort
+  externalTrafficPolicy: Local
+  {{- else }}
+  type: ClusterIP
+  {{- end }}
+  selector:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: {{ $service }}
+  ports:
+    - name: http
+      port: {{ $config.port }}
+      targetPort: http
+    - name: metrics
+      port: {{ $root.Values.chaos.managementPort }}
+      targetPort: {{ if $chaos }}management{{ else }}http{{ end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-{{ $service }}
+  {{- with $config.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ $config.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $service }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: {{ $service }}
+        # Alloy maps this label to the Loki `app` label; not part of the selector.
+        app.kubernetes.io/name: {{ $service }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      {{- if eq $service "api-gateway" }}
+      # externalTrafficPolicy: Local only serves from nodes with a gateway Pod.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          matchLabelKeys: [pod-template-hash]
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $root.Release.Name }}
+              app.kubernetes.io/component: {{ $service }}
+      {{- end }}
+      imagePullSecrets:
+        {{- toYaml $root.Values.imagePullSecrets | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ $service }}
+          image: "{{ $root.Values.images.registry }}/spring-petclinic-{{ $service }}:{{ $root.Values.images.tag }}"
+          imagePullPolicy: {{ $root.Values.images.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ $config.port }}
+            {{- if $chaos }}
+            - name: management
+              containerPort: {{ $root.Values.chaos.managementPort }}
+            {{- end }}
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=65.0"
+            - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
+              value: {{ if $chaos }}health,info,prometheus,chaosmonkey{{ else }}health,info,prometheus{{ end }}
+            {{- if $chaos }}
+            - name: MANAGEMENT_SERVER_PORT
+              value: {{ $root.Values.chaos.managementPort | quote }}
+            - name: MANAGEMENT_ENDPOINT_CHAOSMONKEY_ACCESS
+              value: unrestricted
+            - name: CHAOS_MONKEY_ENABLED
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_RESTCONTROLLER
+              value: "true"
+            - name: CHAOS_MONKEY_WATCHER_SERVICE
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_REPOSITORY
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_CONTROLLER
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_COMPONENT
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_ACTUATORHEALTH
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_RESTTEMPLATE
+              value: "false"
+            - name: CHAOS_MONKEY_WATCHER_WEBCLIENT
+              value: "false"
+            - name: CHAOS_MONKEY_ASSAULTS_LATENCYACTIVE
+              value: "false"
+            - name: CHAOS_MONKEY_ASSAULTS_EXCEPTIONSACTIVE
+              value: "false"
+            - name: CHAOS_MONKEY_ASSAULTS_KILLAPPLICATIONACTIVE
+              value: "false"
+            - name: CHAOS_MONKEY_ASSAULTS_MEMORYACTIVE
+              value: "false"
+            - name: CHAOS_MONKEY_ASSAULTS_CPUACTIVE
+              value: "false"
+            {{- end }}
+            - name: MANAGEMENT_TRACING_ENABLED
+              value: "false"
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ if $chaos }}"production,mysql,chaos-monkey"{{ else if has $service (list "customers-service" "visits-service" "vets-service") }}"production,mysql"{{ else }}"production"{{ end }}
+            {{- range $downstream, $settings := $root.Values.services }}
+            - name: PETCLINIC_{{ $downstream | upper | replace "-" "_" }}_URL
+              value: "http://{{ $name }}-{{ $downstream }}:{{ $settings.port }}"
+            {{- end }}
+            {{- if has $service (list "customers-service" "visits-service" "vets-service") }}
+            - name: MYSQL_HOST
+              value: {{ $name }}-mysql
+            - name: MYSQL_DATABASE
+              value: petclinic
+            - name: MYSQL_USER
+              value: petclinic
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "petclinic.mysqlSecret" $root }}
+                  key: MYSQL_PASSWORD
+            {{- end }}
+            {{- if and (eq $service "genai-service") $root.Values.genai.existingSecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.genai.existingSecret }}
+                  key: OPENAI_API_KEY
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ if $chaos }}management{{ else }}http{{ end }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ if $chaos }}management{{ else }}http{{ end }}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ if $chaos }}management{{ else }}http{{ end }}
+            periodSeconds: 10
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+{{- end }}

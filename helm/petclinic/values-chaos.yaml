@@ -1,0 +1,5 @@
+# Opt-in through Argo CD source.helm.valueFiles: [values.yaml, values-chaos.yaml].
+# Instrument visits-service; faults remain OFF until explicitly enabled.
+chaos:
+  enabled: true
+  services: [visits-service]

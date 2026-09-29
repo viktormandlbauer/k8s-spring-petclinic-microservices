@@ -1,0 +1,125 @@
+{{- $name := include "petclinic.name" . -}}
+{{- if not .Values.mysql.existingSecret }}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace (include "petclinic.mysqlSecret" .) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "petclinic.mysqlSecret" . }}
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+type: Opaque
+data:
+  MYSQL_ROOT_PASSWORD: {{ if $secret }}{{ index $secret.data "MYSQL_ROOT_PASSWORD" }}{{ else }}{{ randAlphaNum 40 | b64enc | quote }}{{ end }}
+  MYSQL_PASSWORD: {{ if $secret }}{{ index $secret.data "MYSQL_PASSWORD" }}{{ else }}{{ randAlphaNum 40 | b64enc | quote }}{{ end }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-mysql-initdb
+data:
+{{ (.Files.Glob "files/initdb/*.sql").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-mysql
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-mysql
+spec:
+  serviceName: {{ $name }}-mysql
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: mysql
+        app.kubernetes.io/name: mysql
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          args: ["--performance-schema=OFF", "--innodb-buffer-pool-size=256M"]
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_DATABASE
+              value: petclinic
+            - name: MYSQL_USER
+              value: petclinic
+          envFrom:
+            - secretRef:
+                name: {{ include "petclinic.mysqlSecret" . }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+              subPath: mysql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          startupProbe:
+            exec:
+              command: [sh, -c, 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -h 127.0.0.1 -uroot -e "SELECT 1"']
+            periodSeconds: 5
+            failureThreshold: 90
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -h 127.0.0.1 -uroot -e "SELECT 1"']
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ $name }}-mysql-initdb
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        volumeMode: Filesystem
+        storageClassName: {{ required "mysql.storageClass must name a vSphere CSI storage class" .Values.mysql.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.storage | quote }}

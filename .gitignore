@@ -21,3 +21,8 @@ target/
 generated/
 
 **/.DS_Store
+
+# Local GenAI provider keys
+.env
+.m2/
+dist/

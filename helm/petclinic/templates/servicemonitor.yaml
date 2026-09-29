@@ -1,0 +1,23 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "petclinic.name" . }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      petclinic-metrics: "true"
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  targetLabels:
+    - app.kubernetes.io/component
+  endpoints:
+    - port: metrics
+      path: /actuator/prometheus
+      interval: {{ .Values.monitoring.interval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+{{- end }}

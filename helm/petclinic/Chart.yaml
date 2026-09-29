@@ -1,0 +1,6 @@
+apiVersion: v2
+name: petclinic
+description: Spring Petclinic microservices with vSphere CSI MySQL and F5 CIS ingress
+type: application
+version: 0.3.0
+appVersion: "4.0.1"

@@ -1,0 +1,43 @@
+# Owned by team-a. Argo CD reconciles Applications in team-a-poc only for project
+# team-a (k8s-poc-platform tenants.yaml); the platform entry Application syncs this directory.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: petclinic
+  namespace: team-a-poc
+spec:
+  project: team-a
+  source:
+    repoURL: https://github.com/viktormandlbauer/k8s-spring-petclinic-microservices.git
+    targetRevision: main
+    path: helm/petclinic
+    helm:
+      releaseName: petclinic
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: team-a-poc
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      name: petclinic-mysql
+      jqPathExpressions:
+        - '.spec.volumeClaimTemplates[]?.status'
+    - group: ''
+      kind: Secret
+      name: petclinic-mysql
+      jsonPointers:
+        - /data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

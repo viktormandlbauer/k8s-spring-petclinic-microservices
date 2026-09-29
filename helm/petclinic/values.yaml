@@ -1,0 +1,58 @@
+images:
+  registry: registry.example.com/petclinic
+  tag: "8504aeaf1af1-r2"
+  pullPolicy: IfNotPresent
+chaos:
+  enabled: false
+  services: [visits-service]
+  managementPort: 9090
+imagePullSecrets:
+  - name: registry-pull
+monitoring:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+services:
+  api-gateway:
+    port: 8080
+    replicas: 2
+  customers-service:
+    port: 8081
+    replicas: 2
+  visits-service:
+    port: 8082
+    replicas: 2
+  vets-service:
+    port: 8083
+    replicas: 2
+    # Deployment metadata only: changing this does not roll the pods.
+    deploymentAnnotations:
+      poc.thesis/gitops-drift: baseline
+  genai-service:
+    port: 8084
+    replicas: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+genai:
+  existingSecret: ""
+mysql:
+  image: docker.io/library/mysql:8.4
+  existingSecret: ""
+  storageClass: vsphere-test
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+# Platform tenants.yaml owns the F5 route and all network allowances.
+# This named NodePort exception is required by the current CIS deployment.
+gateway:
+  nodePort: true
